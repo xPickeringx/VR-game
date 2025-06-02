@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Juego FPS 3D</title>
+  <link rel="stylesheet" href="./css/main.css">
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "./build/three.module.js",
+        "three/addons/": "./jsm/"
+      }
+    }
+  </script>
+</head>
+<body>
+  <!-- HUD -->
+  <div id="hud">
+    <div id="score">Aciertos: 0</div>
+    <div id="accuracy">Precisión: 0%</div>
+    <div id="timer">Tiempo: 60s</div>
+  </div>
+
+  <!-- Puntero -->
+  <div id="crosshair"></div>
+
+  <!-- Pantalla final -->
+  <div id="endScreen">
+    <h2 class="end-title">🏁 ¡Juego Terminado!</h2>
+    <p id="finalScore">Puntaje final: 0</p>
+    <p id="finalAccuracy">Precisión final: 0%</p>
+    <div class="end-buttons">
+      <button id="restartButton">Reiniciar</button>
+      <button id="mainMenuButton">Volver al Menú Principal</button>
+    </div>
+  </div>
+
+  <!-- Main Menu -->
+  <div id="main-menu">
+    <h1>Juego de Tiro 3D</h1>
+    <button id="start-button">Iniciar Juego</button><br>
+    <button id="controls-button">Controles</button><br>
+    <button id="leaderboard-button">Leaderboards</button>
+  </div>
+
+  
+    <!-- Modal de Leaderboards -->
+  <div id="leaderboard-modal">
+      <h2>Leaderboard</h2>
+      <ol id="leaderboard-list">
+        <!-- Las entradas se llenarán dinámicamente -->
+      </ol>
+      <button onclick="document.getElementById('leaderboard-modal').style.display='none'">Cerrar</button>
+  </div>
+    <!-- Modal de Controles -->
+  <div id="controls-modal">
+    <h2>Controles</h2>
+    <ul>
+      <li><b>WASD</b>: Moverse</li>
+      <li><b>Mouse</b>: Apuntar</li>
+      <li><b>Click</b>: Disparar</li>
+    </ul>
+    <button onclick="document.getElementById('controls-modal').style.display='none'">Cerrar</button>
+  </div>
+  
+
+  <!-- Script de menú -->
+  <script>
+    document.getElementById('start-button').addEventListener('click', () => {
+      document.getElementById('main-menu').style.display = 'none';
+      if (typeof window.startGame === 'function') {
+        window.startGame();
+      }
+    });
+
+    document.getElementById('controls-button').addEventListener('click', () => {
+      document.getElementById('controls-modal').style.display = 'block';
+    });
+
+    document.getElementById('leaderboard-button').addEventListener('click', () => {
+  const leaderboard = JSON.parse(localStorage.getItem('leaderboard')) || [];
+  const listElement = document.getElementById('leaderboard-list');
+  listElement.innerHTML = ''; // Limpiar lista
+
+  leaderboard
+    .sort((a, b) => b.score - a.score) // Ordenar por puntaje descendente
+    .slice(0, 10) // Mostrar solo top 10
+    .forEach(entry => {
+      const li = document.createElement('li');
+      li.textContent = `${entry.name || "Jugador"} - ${entry.score} pts - Precisión: ${entry.accuracy}%`;
+      listElement.appendChild(li);
+    });
+
+  document.getElementById('leaderboard-modal').style.display = 'block';
+});
+
+
+    document.getElementById('mainMenuButton').addEventListener('click', () => {
+      document.getElementById('endScreen').style.display = 'none';
+      document.getElementById('main-menu').style.display = 'block';
+    });
+  </script>
+
+  <!-- Script principal del juego -->
+  <script type="module" src="./js/main.js"></script>
+</body>
+</html>
