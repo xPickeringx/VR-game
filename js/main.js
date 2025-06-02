@@ -86,11 +86,12 @@ function init() {
   directionalLight.castShadow = true;
   scene.add(directionalLight);
 
+  setupControllers();
   createEnvironment();
   createTargets();
   createWeapon();
   createVRHUD();
-  setupControllers();
+  
   window.addEventListener('resize', onWindowResize);
   startGameTimer();
 }
