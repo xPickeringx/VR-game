@@ -7,7 +7,7 @@ import { XRControllerModelFactory } from 'three/addons/webxr/XRControllerModelFa
 let camera, scene, renderer;
 let controller1;
 let listener, shootSound, hitSound;
-let weapon; // Variable global para el arma
+let weapon;
 let targets = [];
 let score = 0;
 let shotsFired = 0;
@@ -17,7 +17,7 @@ let gameInterval;
 let gameEnded = false;
 let vrHUD;
 
-const originalSize = 1; // Tamaño original de objetivos
+const originalSize = 1;
 const raycaster = new THREE.Raycaster();
 const textureLoader = new THREE.TextureLoader();
 
@@ -32,6 +32,7 @@ wallTexture.repeat.set(1, 1);
 const ceilingTexture = textureLoader.load('./assets/ceiling.jpg');
 ceilingTexture.wrapS = ceilingTexture.wrapT = THREE.RepeatWrapping;
 ceilingTexture.repeat.set(10, 10);
+
 const floorMaterial = new THREE.MeshStandardMaterial({ map: floorTexture });
 const wallMaterial = new THREE.MeshStandardMaterial({ map: wallTexture });
 const ceilingMaterial = new THREE.MeshStandardMaterial({ map: ceilingTexture });
@@ -47,6 +48,7 @@ function init() {
   scene.background = new THREE.Color(0xD3D3D3);
 
   camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+  camera.position.set(0, 1.6, 0); // Altura estándar del jugador
 
   listener = new THREE.AudioListener();
   camera.add(listener);
@@ -72,17 +74,69 @@ function init() {
   document.body.appendChild(renderer.domElement);
   document.body.appendChild(VRButton.createButton(renderer));
 
-  scene.add(camera);
+  // ¡NO agregar la cámara manualmente! Three.js maneja esto con WebXR
+  // scene.add(camera); <-- Esto se eliminó
+
+  // ✅ Añadir luces para que se vea en VR
+  const ambientLight = new THREE.AmbientLight(0xffffff, 0.4);
+  scene.add(ambientLight);
+
+  const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+  directionalLight.position.set(5, 10, 7.5);
+  directionalLight.castShadow = true;
+  scene.add(directionalLight);
 
   createEnvironment();
   createTargets();
   createWeapon();
   createVRHUD();
-
   setupControllers();
   window.addEventListener('resize', onWindowResize);
   startGameTimer();
 }
+function createEnvironment() {
+  // Piso
+  const floorGeometry = new THREE.PlaneGeometry(40, 40);
+  const floor = new THREE.Mesh(floorGeometry, floorMaterial);
+  floor.rotation.x = -Math.PI / 2;
+  floor.receiveShadow = true;
+  scene.add(floor);
+
+  // Techo
+  const ceilingGeometry = new THREE.PlaneGeometry(40, 40);
+  const ceiling = new THREE.Mesh(ceilingGeometry, ceilingMaterial);
+  ceiling.position.y = 5;
+  ceiling.rotation.x = Math.PI / 2;
+  ceiling.receiveShadow = false;
+  scene.add(ceiling);
+
+  // Paredes (4 lados)
+  const wallGeometry = new THREE.PlaneGeometry(40, 5);
+
+  const wall1 = new THREE.Mesh(wallGeometry, wallMaterial);
+  wall1.position.z = -20;
+  wall1.position.y = 2.5;
+  scene.add(wall1);
+
+  const wall2 = new THREE.Mesh(wallGeometry, wallMaterial);
+  wall2.position.z = 20;
+  wall2.rotation.y = Math.PI;
+  wall2.position.y = 2.5;
+  scene.add(wall2);
+
+  const wall3 = new THREE.Mesh(wallGeometry, wallMaterial);
+  wall3.position.x = -20;
+  wall3.rotation.y = Math.PI / 2;
+  wall3.position.y = 2.5;
+  scene.add(wall3);
+
+  const wall4 = new THREE.Mesh(wallGeometry, wallMaterial);
+  wall4.position.x = 20;
+  wall4.rotation.y = -Math.PI / 2;
+  wall4.position.y = 2.5;
+  scene.add(wall4);
+}
+
 function createTargets() {
   const targetGeometry = new THREE.SphereGeometry(originalSize, 32, 32);
   const targetMaterial = new THREE.MeshStandardMaterial({ color: 0xff0000 });
@@ -90,41 +144,32 @@ function createTargets() {
   for (let i = 0; i < 5; i++) {
     const target = new THREE.Mesh(targetGeometry, targetMaterial.clone());
     target.castShadow = true;
-
-    // Posición inicial aleatoria
     target.position.set(
-      Math.random() * 20 - 10,     // x: entre -10 y 10
-      Math.random() * 2 + 1,       // y: entre 1 y 3 metros de altura
-      -10 - Math.random() * 10     // z: entre -10 y -20 (en frente del jugador)
+      Math.random() * 20 - 10,
+      Math.random() * 2 + 1,
+      -10 - Math.random() * 10
     );
-
     target.userData.velocity = (Math.random() < 0.5 ? -1 : 1) * (0.02 + Math.random() * 0.03);
     target.userData.hit = false;
-
     scene.add(target);
     targets.push(target);
   }
 }
+
 function createWeapon() {
   const weaponGeometry = new THREE.BoxGeometry(0.1, 0.05, 0.3);
   const weaponMaterial = new THREE.MeshStandardMaterial({ color: 0x333333 });
   weapon = new THREE.Mesh(weaponGeometry, weaponMaterial);
   weapon.castShadow = true;
-
-  // Posiciona el arma frente al controlador
-  weapon.position.set(0, -0.02, -0.15); // Ajusta si se ve mal en VR
+  weapon.position.set(0, -0.02, -0.15); 
   controller1.add(weapon);
 }
+
 function animateWeapon() {
   if (!weapon) return;
-
   const initialZ = -0.15;
   const recoilZ = -0.25;
-
-  // Movimiento hacia atrás (recoil)
   weapon.position.z = recoilZ;
-
-  // Regresa suavemente
   setTimeout(() => {
     weapon.position.z = initialZ;
   }, 100);
@@ -176,8 +221,6 @@ function updateVRHUD() {
   vrHUD.userData.texture.needsUpdate = true;
 }
 
-// El resto del código (createEnvironment, createTargets, resetTargetTimer, etc.) se mantiene igual
-
 function onShoot() {
   if (gameEnded) return;
   shotsFired++;
@@ -193,10 +236,8 @@ function onShoot() {
     if (!target.userData.hit) {
       target.userData.hit = true;
       score++;
-
       if (hitSound && hitSound.isPlaying) hitSound.stop();
       hitSound.play();
-
       target.material.color.set(0x00ff00);
       clearTimeout(target.userData.timeout);
       clearInterval(target.userData.scaleInterval);
