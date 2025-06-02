@@ -83,6 +83,52 @@ function init() {
   window.addEventListener('resize', onWindowResize);
   startGameTimer();
 }
+function createTargets() {
+  const targetGeometry = new THREE.SphereGeometry(originalSize, 32, 32);
+  const targetMaterial = new THREE.MeshStandardMaterial({ color: 0xff0000 });
+
+  for (let i = 0; i < 5; i++) {
+    const target = new THREE.Mesh(targetGeometry, targetMaterial.clone());
+    target.castShadow = true;
+
+    // Posición inicial aleatoria
+    target.position.set(
+      Math.random() * 20 - 10,     // x: entre -10 y 10
+      Math.random() * 2 + 1,       // y: entre 1 y 3 metros de altura
+      -10 - Math.random() * 10     // z: entre -10 y -20 (en frente del jugador)
+    );
+
+    target.userData.velocity = (Math.random() < 0.5 ? -1 : 1) * (0.02 + Math.random() * 0.03);
+    target.userData.hit = false;
+
+    scene.add(target);
+    targets.push(target);
+  }
+}
+function createWeapon() {
+  const weaponGeometry = new THREE.BoxGeometry(0.1, 0.05, 0.3);
+  const weaponMaterial = new THREE.MeshStandardMaterial({ color: 0x333333 });
+  weapon = new THREE.Mesh(weaponGeometry, weaponMaterial);
+  weapon.castShadow = true;
+
+  // Posiciona el arma frente al controlador
+  weapon.position.set(0, -0.02, -0.15); // Ajusta si se ve mal en VR
+  controller1.add(weapon);
+}
+function animateWeapon() {
+  if (!weapon) return;
+
+  const initialZ = -0.15;
+  const recoilZ = -0.25;
+
+  // Movimiento hacia atrás (recoil)
+  weapon.position.z = recoilZ;
+
+  // Regresa suavemente
+  setTimeout(() => {
+    weapon.position.z = initialZ;
+  }, 100);
+}
 
 function setupControllers() {
   controller1 = renderer.xr.getController(0);
