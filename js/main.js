@@ -1,21 +1,30 @@
-// Importa Three.js y los controles
 import * as THREE from 'three';
-import { VRButton } from 'three/addons/webxr/VRButton.js';
+import { PointerLockControls } from 'three/addons/controls/PointerLockControls.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
-import { XRControllerModelFactory } from 'three/addons/webxr/XRControllerModelFactory.js';
+import { VRButton } from 'three/addons/webxr/VRButton.js'; // ✅ Importar VRButton
 
-let camera, scene, renderer;
-let controller1;
+let camera, scene, renderer, controls;
 let listener, shootSound, hitSound;
 let weapon;
 let targets = [];
 let score = 0;
 let shotsFired = 0;
 let clock = new THREE.Clock();
+let moveForward = false;
+let moveBackward = false;
+let moveLeft = false;
+let moveRight = false;
+let speed = 5;
+let velocity = new THREE.Vector3();
+let direction = new THREE.Vector3();
+let isOnGround = false;
+let isJumping = false;
+let isCrouching = false;
+let jumpHeight = 3;
+let crouchHeight = 0.5;
 let gameTimer = 60;
 let gameInterval;
 let gameEnded = false;
-let vrHUD;
 
 const originalSize = 1;
 const raycaster = new THREE.Raycaster();
@@ -40,16 +49,16 @@ const ceilingMaterial = new THREE.MeshStandardMaterial({ map: ceilingTexture });
 document.getElementById('start-button').addEventListener('click', () => {
   document.getElementById('main-menu').style.display = 'none';
   init();
-  animate();
+  // animate(); ⛔️ Se reemplaza por setAnimationLoop más abajo
 });
 
 function init() {
   scene = new THREE.Scene();
   scene.background = new THREE.Color(0xD3D3D3);
 
-  camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
-  camera.position.set(0, 1.6, 0); // Altura estándar del jugador
+  camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 1, 1000);
 
+  // Audio
   listener = new THREE.AudioListener();
   camera.add(listener);
 
@@ -70,162 +79,183 @@ function init() {
   renderer = new THREE.WebGLRenderer({ antialias: true });
   renderer.setSize(window.innerWidth, window.innerHeight);
   renderer.shadowMap.enabled = true;
-  renderer.xr.enabled = true;
+  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  renderer.xr.enabled = true; // ✅ Habilitar VR
   document.body.appendChild(renderer.domElement);
-  document.body.appendChild(VRButton.createButton(renderer));
+  document.body.appendChild(VRButton.createButton(renderer)); // ✅ Botón para entrar en VR
 
-  // ¡NO agregar la cámara manualmente! Three.js maneja esto con WebXR
-  // scene.add(camera); <-- Esto se eliminó
+  createWeapon();
 
-  // ✅ Añadir luces para que se vea en VR
-  const ambientLight = new THREE.AmbientLight(0xffffff, 0.4);
+  const sunLight = new THREE.DirectionalLight(0xffffff, 1.2);
+  sunLight.position.set(0, 50, 0);
+  sunLight.castShadow = true;
+  sunLight.shadow.mapSize.set(1024, 1024);
+  sunLight.shadow.camera.near = 1;
+  sunLight.shadow.camera.far = 100;
+  sunLight.shadow.camera.left = -50;
+  sunLight.shadow.camera.right = 50;
+  sunLight.shadow.camera.top = 50;
+  sunLight.shadow.camera.bottom = -50;
+  scene.add(sunLight);
+
+  const ambientLight = new THREE.AmbientLight(0x404040);
   scene.add(ambientLight);
 
-  const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
-  directionalLight.position.set(5, 10, 7.5);
-  directionalLight.castShadow = true;
-  scene.add(directionalLight);
+  controls = new PointerLockControls(camera, document.body);
+  document.body.addEventListener('click', () => {
+    if (!gameEnded && !renderer.xr.isPresenting) {
+      document.body.requestPointerLock();
+    }
+  });
 
-  setupControllers();
+  controls.addEventListener('lock', () => document.body.style.cursor = 'none');
+  controls.addEventListener('unlock', () => document.body.style.cursor = 'auto');
+  scene.add(controls.object);
+
   createEnvironment();
   createTargets();
-  createWeapon();
-  createVRHUD();
-  
+
+  document.addEventListener('keydown', onKeyDown, false);
+  document.addEventListener('keyup', onKeyUp, false);
+  document.addEventListener('click', onShoot, false);
   window.addEventListener('resize', onWindowResize);
   startGameTimer();
+
+  renderer.setAnimationLoop(animate); // ✅ Loop compatible con VR
 }
 function createEnvironment() {
-  // Piso
-  const floorGeometry = new THREE.PlaneGeometry(40, 40);
+  // Crear el suelo
+  const floorGeometry = new THREE.PlaneGeometry(100, 100);
+  const floorMaterial = new THREE.MeshStandardMaterial({ map: floorTexture }); // Usando la textura cargada
   const floor = new THREE.Mesh(floorGeometry, floorMaterial);
   floor.rotation.x = -Math.PI / 2;
   floor.receiveShadow = true;
   scene.add(floor);
 
-  // Techo
-  const ceilingGeometry = new THREE.PlaneGeometry(40, 40);
+  // Crear paredes
+  const wallGeometry = new THREE.BoxGeometry(100, 20, 1);
+  const wallMaterial = new THREE.MeshStandardMaterial({ map: wallTexture }); // Usando la textura cargada
+
+  const walls = [
+    [0, 10, -50], [0, 10, 50], [-50, 10, 0], [50, 10, 0]
+  ];
+  walls.forEach((pos, i) => {
+    const wall = new THREE.Mesh(wallGeometry, wallMaterial);
+    wall.position.set(...pos);
+    if (i >= 2) wall.rotation.y = Math.PI / 2;
+    wall.receiveShadow = true;
+    scene.add(wall);
+  });
+
+  // Crear el techo
+  const ceilingGeometry = new THREE.PlaneGeometry(100, 100);
+  const ceilingMaterial = new THREE.MeshStandardMaterial({ map: ceilingTexture }); // Usando la textura cargada
   const ceiling = new THREE.Mesh(ceilingGeometry, ceilingMaterial);
-  ceiling.position.y = 5;
   ceiling.rotation.x = Math.PI / 2;
-  ceiling.receiveShadow = false;
+  ceiling.position.y = 20; // Posicionar arriba
+  ceiling.receiveShadow = true;
   scene.add(ceiling);
+   // Crear las luces direccionales en cada esquina
+   const cornerLights = [
+    { position: [-50, 20, -50], color: 0xffffff },
+    { position: [50, 20, -50], color: 0xffffff },
+    { position: [-50, 20, 50], color: 0xffffff },
+    { position: [50, 20, 50], color: 0xffffff }
+  ];
 
-  // Paredes (4 lados)
-  const wallGeometry = new THREE.PlaneGeometry(40, 5);
+  cornerLights.forEach((lightData) => {
+    const light = new THREE.DirectionalLight(lightData.color, 1.0);
+    light.position.set(...lightData.position);
+    light.castShadow = true;
+    light.shadow.mapSize.width = 1024;
+    light.shadow.mapSize.height = 1024;
+    light.shadow.camera.near = 0.5;
+    light.shadow.camera.far = 50;
+    light.shadow.camera.left = -50;
+    light.shadow.camera.right = 50;
+    light.shadow.camera.top = 50;
+    light.shadow.camera.bottom = -50;
+    scene.add(light);
+  });
 
-  const wall1 = new THREE.Mesh(wallGeometry, wallMaterial);
-  wall1.position.z = -20;
-  wall1.position.y = 2.5;
-  scene.add(wall1);
-
-  const wall2 = new THREE.Mesh(wallGeometry, wallMaterial);
-  wall2.position.z = 20;
-  wall2.rotation.y = Math.PI;
-  wall2.position.y = 2.5;
-  scene.add(wall2);
-
-  const wall3 = new THREE.Mesh(wallGeometry, wallMaterial);
-  wall3.position.x = -20;
-  wall3.rotation.y = Math.PI / 2;
-  wall3.position.y = 2.5;
-  scene.add(wall3);
-
-  const wall4 = new THREE.Mesh(wallGeometry, wallMaterial);
-  wall4.position.x = 20;
-  wall4.rotation.y = -Math.PI / 2;
-  wall4.position.y = 2.5;
-  scene.add(wall4);
+  // Añadir una luz ambiental suave para iluminar el resto del entorno
+  const ambientLight = new THREE.AmbientLight(0x404040);
+  scene.add(ambientLight);
 }
 
+
+
+ 
+
+
 function createTargets() {
-  const targetGeometry = new THREE.SphereGeometry(originalSize, 32, 32);
-  const targetMaterial = new THREE.MeshStandardMaterial({ color: 0xff0000 });
+  const geometry = new THREE.SphereGeometry(1, 32, 32);
+  const material = new THREE.MeshStandardMaterial({ color: 0xff0000 });
 
   for (let i = 0; i < 5; i++) {
-    const target = new THREE.Mesh(targetGeometry, targetMaterial.clone());
-    target.castShadow = true;
+    const target = new THREE.Mesh(geometry, material.clone());
     target.position.set(
       Math.random() * 20 - 10,
-      Math.random() * 2 + 1,
-      -10 - Math.random() * 10
+      Math.random() * 5 + 1,
+      -Math.random() * 20 - 10
     );
-    target.userData.velocity = (Math.random() < 0.5 ? -1 : 1) * (0.02 + Math.random() * 0.03);
     target.userData.hit = false;
+    target.castShadow = true;
+    target.receiveShadow = true;
+    target.scale.set(originalSize, originalSize, originalSize);
+
+    // Solo movimiento en eje X
+    target.userData.velocity = 0.05 + Math.random() * 0.05; // 0.05 a 0.1
+    if (Math.random() < 0.5) target.userData.velocity *= -1;
+
     scene.add(target);
     targets.push(target);
+    resetTargetTimer(target);
   }
 }
 
-function createWeapon() {
-  const weaponGeometry = new THREE.BoxGeometry(0.1, 0.05, 0.3);
-  const weaponMaterial = new THREE.MeshStandardMaterial({ color: 0x333333 });
-  weapon = new THREE.Mesh(weaponGeometry, weaponMaterial);
-  weapon.castShadow = true;
-  weapon.position.set(0, -0.02, -0.15); 
-  controller1.add(weapon);
+
+
+function resetTargetTimer(target) {
+  if (target.userData.timeout) clearTimeout(target.userData.timeout);
+  if (target.userData.scaleInterval) clearInterval(target.userData.scaleInterval);
+
+  target.userData.timeout = setTimeout(() => relocateTarget(target), 6000);
+  resetTargetSize(target);
 }
 
-function animateWeapon() {
-  if (!weapon) return;
-  const initialZ = -0.15;
-  const recoilZ = -0.25;
-  weapon.position.z = recoilZ;
-  setTimeout(() => {
-    weapon.position.z = initialZ;
-  }, 100);
+function resetTargetSize(target) {
+  target.scale.set(originalSize, originalSize, originalSize);
+  if (target.userData.scaleInterval) clearInterval(target.userData.scaleInterval);
+
+  target.userData.scaleInterval = setInterval(() => {
+    let currentScale = target.scale.x;
+    if (currentScale > originalSize * 0.30) {
+      let newScale = currentScale * 0.98;
+      target.scale.set(newScale, newScale, newScale);
+    } else {
+      clearInterval(target.userData.scaleInterval);
+    }
+  }, 200); // Cada 100ms
 }
 
-function setupControllers() {
-  controller1 = renderer.xr.getController(0);
-  controller1.addEventListener('selectstart', onShoot);
-  scene.add(controller1);
-
-  const controllerModelFactory = new XRControllerModelFactory();
-  const grip1 = renderer.xr.getControllerGrip(0);
-  grip1.add(controllerModelFactory.createControllerModel(grip1));
-  scene.add(grip1);
-}
-
-function createVRHUD() {
-  const hudGeometry = new THREE.PlaneGeometry(0.5, 0.2);
-  const hudMaterial = new THREE.MeshBasicMaterial({ color: 0x000000, opacity: 0.5, transparent: true });
-  vrHUD = new THREE.Mesh(hudGeometry, hudMaterial);
-
-  const canvas = document.createElement('canvas');
-  canvas.width = 256;
-  canvas.height = 64;
-  const context = canvas.getContext('2d');
-  context.fillStyle = 'white';
-  context.font = '24px Arial';
-  context.fillText('Aciertos: 0', 10, 30);
-  context.fillText('Precisión: 0%', 10, 55);
-
-  const hudTexture = new THREE.CanvasTexture(canvas);
-  vrHUD.material.map = hudTexture;
-  vrHUD.material.needsUpdate = true;
-  vrHUD.position.set(0, -0.3, -1);
-  camera.add(vrHUD);
-  vrHUD.userData.canvas = canvas;
-  vrHUD.userData.context = context;
-  vrHUD.userData.texture = hudTexture;
-}
-
-function updateVRHUD() {
-  const ctx = vrHUD.userData.context;
-  ctx.clearRect(0, 0, 256, 64);
-  ctx.fillStyle = 'white';
-  ctx.font = '24px Arial';
-  ctx.fillText(`Aciertos: ${score}`, 10, 30);
-  const accuracy = shotsFired > 0 ? ((score / shotsFired) * 100).toFixed(1) : 0;
-  ctx.fillText(`Precisión: ${accuracy}%`, 10, 55);
-  vrHUD.userData.texture.needsUpdate = true;
+function relocateTarget(target) {
+  target.position.set(
+    Math.random() * 20 - 10,
+    Math.random() * 5 + 1,
+    -Math.random() * 20 - 10
+  );
+  target.material.color.set(0xff0000);
+  target.userData.hit = false;
+  resetTargetTimer(target);
 }
 
 function onShoot() {
   if (gameEnded) return;
+
   shotsFired++;
 
+  // Reproducir sonido de disparo
   if (shootSound && shootSound.isPlaying) shootSound.stop();
   shootSound.play();
 
@@ -237,8 +267,11 @@ function onShoot() {
     if (!target.userData.hit) {
       target.userData.hit = true;
       score++;
+
+      // Reproducir sonido de impacto
       if (hitSound && hitSound.isPlaying) hitSound.stop();
       hitSound.play();
+
       target.material.color.set(0x00ff00);
       clearTimeout(target.userData.timeout);
       clearInterval(target.userData.scaleInterval);
@@ -247,19 +280,207 @@ function onShoot() {
   }
 
   animateWeapon();
-  updateVRHUD();
+  updateHUD();
+}
+
+
+function onKeyDown(event) {
+  switch (event.key) {
+    case 'w': moveForward = true; break;
+    case 's': moveBackward = true; break;
+    case 'd': moveLeft = true; break;
+    case 'a': moveRight = true; break;
+    
+  }
+}
+
+function onKeyUp(event) {
+  switch (event.key) {
+    case 'w': moveForward = false; break;
+    case 's': moveBackward = false; break;
+    case 'd': moveLeft = false; break;
+    case 'a': moveRight = false; break;
+    
+  }
+}
+
+function onWindowResize() {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+}
+
+function updateHUD() {
+  document.getElementById("score").textContent = `Aciertos: ${score}`;
+  const accuracy = shotsFired > 0 ? ((score / shotsFired) * 100).toFixed(1) : 0;
+  document.getElementById("accuracy").textContent = `Precisión: ${accuracy}%`;
+}
+
+function startGameTimer() {
+  document.getElementById("timer").textContent = `Tiempo: ${gameTimer}`;
+  gameInterval = setInterval(() => {
+    gameTimer--;
+    document.getElementById("timer").textContent = `Tiempo: ${gameTimer}`;
+    if (gameTimer <= 0) {
+      endGame();
+    }
+  }, 1000);
+}
+
+
+function endGame() {
+  clearInterval(gameInterval);
+  gameEnded = true;
+  document.exitPointerLock();
+
+  const accuracy = shotsFired > 0 ? ((score / shotsFired) * 100).toFixed(1) : 0;
+
+  // Mostrar la pantalla final
+  document.getElementById("endScreen").style.display = "block";
+  document.getElementById("finalScore").textContent = `Puntaje final: ${score}`;
+  document.getElementById("finalAccuracy").textContent = `Precisión final: ${accuracy}%`;
+  guardarEnLeaderboard(score, accuracy);
+
+  // Configurar el botón de reinicio
+  document.getElementById("restartButton").addEventListener("click", () => {
+    resetGame();  // Ahora solo se reinicia cuando se hace clic en "Reiniciar"
+    document.getElementById("endScreen").style.display = "none";  // Oculta la pantalla final
+  });
+  
+  
+
+  // Mostrar el botón para volver al menú principal
+  document.getElementById("mainMenuButton").addEventListener("click", () => {
+    // Recargar la página
+    location.reload();
+  });
+  
+  
+}
+
+function resetGame() {
+  // Detener el juego y restablecer los valores
+  score = 0;
+  shotsFired = 0;
+  gameTimer = 60;
+  gameEnded = false;
+
+  // Limpiar los objetos en la escena
+  targets.forEach(t => {
+    clearTimeout(t.userData.timeout);
+    clearInterval(t.userData.scaleInterval);
+    scene.remove(t);
+  });
+  targets = [];
+
+  // Restablecer el HUD
+  updateHUD();
+
+  // Re-crear los objetivos
+  createTargets();
+
+  // Iniciar el temporizador nuevamente
+  startGameTimer();
+
+  // Restablecer el temporizador en pantalla
+  document.getElementById("timer").textContent = `Tiempo: ${gameTimer}`;
+}
+
+
+function createWeapon() {
+  const loader = new GLTFLoader();
+
+  loader.load('./assets/weapon.glb', (gltf) => {
+    weapon = gltf.scene;
+
+    // Escala y posición para vista en primera persona
+    weapon.scale.set(3.5, 3.5, 3.5);  // Ajusta estos valores según el tamaño del modelo
+    weapon.position.set(0.7, -0.7, 0.0);  // Ajusta la posición a la vista FPS
+    weapon.rotation.y = Math.PI;  // Ajuste para que el arma esté bien orientada
+
+    // Agrega el arma a la cámara
+    camera.add(weapon);
+  }, undefined, (error) => {
+    console.error('Error al cargar el modelo de arma:', error);
+  });
+}
+
+
+
+function animateWeapon() {
+  if (!weapon) return;
+
+  // Retroceso hacia atrás
+  const originalZ = -1.0;  // Posición Z original
+  const recoilZ = -1.2;    // Posición Z del retroceso
+  const duration = 100;     // Duración del retroceso (ms)
+
+  // Ir hacia atrás
+  weapon.position.z = recoilZ;
+
+  setTimeout(() => {
+    // Volver al original suavemente
+    const steps = 5;
+    let step = 0;
+    const interval = setInterval(() => {
+      weapon.position.z += (originalZ - weapon.position.z) / (steps - step);
+      step++;
+      if (step >= steps) {
+        weapon.position.z = originalZ;
+        clearInterval(interval);
+      }
+    }, 10);
+  }, duration);
+}
+
+function guardarEnLeaderboard(puntaje, precision) {
+  const leaderboard = JSON.parse(localStorage.getItem('leaderboard')) || [];
+  leaderboard.push({ name: "Jugador", score: puntaje, accuracy: precision });
+  localStorage.setItem('leaderboard', JSON.stringify(leaderboard));
 }
 
 function animate() {
-  renderer.setAnimationLoop(() => {
-    targets.forEach(target => {
-      target.position.x += target.userData.velocity;
-      const xLimit = 20;
-      if (target.position.x > xLimit || target.position.x < -xLimit) {
-        target.userData.velocity *= -1;
-      }
-    });
+  requestAnimationFrame(animate);
+  const delta = clock.getDelta();
 
-    renderer.render(scene, camera);
+  velocity.x -= velocity.x * 10.0 * delta;
+  velocity.z -= velocity.z * 10.0 * delta;
+  velocity.y -= 9.8 * delta;
+
+  if (isOnGround) {
+    velocity.y = Math.max(0, velocity.y);
+    isJumping = false;
+  }
+
+  direction.z = Number(moveForward) - Number(moveBackward);
+  direction.x = Number(moveRight) - Number(moveLeft);
+  direction.normalize();
+
+  if (moveForward || moveBackward) velocity.z -= direction.z * speed * delta;
+  if (moveLeft || moveRight) velocity.x -= direction.x * speed * delta;
+
+  controls.object.translateX(velocity.x);
+  controls.object.translateZ(velocity.z);
+  controls.object.position.y += velocity.y;
+
+  if (controls.object.position.y <= 1.6) {
+    controls.object.position.y = 1.6;
+    isOnGround = true;
+  } else {
+    isOnGround = false;
+  }
+
+  targets.forEach(target => {
+    target.position.x += target.userData.velocity;
+  
+    // Rebotar si se sale del rango X permitido
+    const xLimit = 20;
+    if (target.position.x > xLimit || target.position.x < -xLimit) {
+      target.userData.velocity *= -1;
+    }
+    
   });
+  
+
+  renderer.render(scene, camera);
 }
