@@ -1,15 +1,15 @@
+// main.js
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { XRControllerModelFactory } from 'three/addons/webxr/XRControllerModelFactory.js';
+import { VRButton } from 'three/addons/webxr/VRButton.js';
 
-// Variables principales
 let camera, scene, renderer;
 let weapon;
 let targets = [];
 let score = 0;
 let shotsFired = 0;
 let clock = new THREE.Clock();
-
 
 let listener, shootSound, hitSound;
 
@@ -34,11 +34,37 @@ let gameInterval;
 let gameEnded = false;
 
 let controller1, controllerGrip1;
-let controller2, controllerGrip2;
+
+let hudMesh;
+let gameOverMesh;
+let gameOverGroup;
+let restartButtonMesh;
+let endedByTimer = false;
+let menuButtonMesh = null;
 
 
-init();
-animate();
+window.startGame = () => {
+  document.getElementById('main-menu').style.display = 'none';
+  document.getElementById('endScreen').style.display = 'none';
+  document.getElementById('hud').style.display = 'none';
+  score = 0;
+  shotsFired = 0;
+  gameTimer = 60;
+  gameEnded = false;
+  endedByTimer = false; // Reiniciar flag
+  targets = [];
+  init();
+  animate();
+};
+
+document.getElementById('restartButton').addEventListener('click', () => {
+  window.startGame();
+});
+
+document.getElementById('mainMenuButton').addEventListener('click', () => {
+  document.getElementById('endScreen').style.display = 'none';
+  document.getElementById('main-menu').style.display = 'block';
+});
 
 function init() {
   scene = new THREE.Scene();
@@ -48,7 +74,6 @@ function init() {
   camera.position.set(0, 1.6, 3);
   scene.add(camera);
 
-  // Audio
   listener = new THREE.AudioListener();
   camera.add(listener);
 
@@ -64,54 +89,167 @@ function init() {
     hitSound.setVolume(0.5);
   });
 
-  // Renderer con XR activado
   renderer = new THREE.WebGLRenderer({ antialias: true });
   renderer.setSize(window.innerWidth, window.innerHeight);
   renderer.xr.enabled = true;
   document.body.appendChild(renderer.domElement);
+  document.body.appendChild(VRButton.createButton(renderer));
 
-  // Botón para entrar en VR
-  document.body.appendChild(THREE.WEBGL.isWebGLAvailable() ? 
-    VRButton.createButton(renderer) : VRButton.createXRNotFoundButton());
-
-  // Crear entorno
   createEnvironment();
-
-  // Crear objetivos
   createTargets();
 
-  // Crear arma (simple cubo)
-  createWeapon();
+  const controllerModelFactory = new XRControllerModelFactory();
 
-  // Controlador VR 1
 controller1 = renderer.xr.getController(0);
 controller1.addEventListener('selectstart', onShoot);
-scene.add(controller1);
 
-// Modelo para controlador 1
-const controllerModelFactory = new XRControllerModelFactory();
 controllerGrip1 = renderer.xr.getControllerGrip(0);
 controllerGrip1.add(controllerModelFactory.createControllerModel(controllerGrip1));
+const geometry = new THREE.BufferGeometry().setFromPoints([
+  new THREE.Vector3(0, 0, 0),
+  new THREE.Vector3(0, 0, -1)
+]);
+const line = new THREE.Line(
+  geometry,
+  new THREE.LineBasicMaterial({ color: 0x00ffff })
+);
+line.name = 'pointer';
+line.scale.z = 5;
+controller1.add(line);
+scene.add(controller1);
+
 scene.add(controllerGrip1);
 
-// Controlador VR 2
-controller2 = renderer.xr.getController(1);
-controller2.addEventListener('selectstart', onShoot);
-scene.add(controller2);
-
-// Modelo para controlador 2
-controllerGrip2 = renderer.xr.getControllerGrip(1);
-controllerGrip2.add(controllerModelFactory.createControllerModel(controllerGrip2));
-scene.add(controllerGrip2);
-
+  createWeapon(controller1);
+  createVRHUD();
 
   window.addEventListener('resize', onWindowResize);
-
   startGameTimer();
 }
 
+function createVRHUD() {
+  const canvas = document.createElement('canvas');
+  canvas.width = 512;
+  canvas.height = 256;
+  const ctx = canvas.getContext('2d');
+
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.fillStyle = 'white';
+  ctx.font = '30px Arial';
+  ctx.fillText(`Aciertos: ${score}`, 20, 50);
+  ctx.fillText(`Precisión: 0%`, 20, 100);
+  ctx.fillText(`Tiempo: ${gameTimer}s`, 20, 150);
+
+  const texture = new THREE.CanvasTexture(canvas);
+  const material = new THREE.MeshBasicMaterial({ map: texture, transparent: true });
+  const geometry = new THREE.PlaneGeometry(1.5, 0.75);
+  hudMesh = new THREE.Mesh(geometry, material);
+
+  hudMesh.position.set(0, 1.6, -2);
+  camera.add(hudMesh);
+  hudMesh.lookAt(camera.position);
+  hudMesh.renderOrder = 999;
+  hudMesh.material.depthTest = false;
+
+  hudMesh.userData.canvas = canvas;
+  hudMesh.userData.context = ctx;
+  hudMesh.userData.texture = texture;
+}
+function createVRGameOverScreen() {
+  if (menuButtonMesh) {
+  camera.remove(menuButtonMesh);
+  menuButtonMesh.geometry.dispose();
+  menuButtonMesh.material.dispose();
+  menuButtonMesh = null;
+}
+
+  // Pantalla base
+  const canvas = document.createElement('canvas');
+  canvas.width = 1024;
+  canvas.height = 512;
+  const ctx = canvas.getContext('2d');
+
+    // Crear el botón de menú en el canvas
+  ctx.fillStyle = "#00AAFF";
+  ctx.fillRect(100, 250, 200, 50);
+  ctx.fillStyle = "#fff";
+  ctx.font = "20px Arial";
+  ctx.fillText("Volver al menú", 120, 280);
+
+  // Crear textura y material
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.needsUpdate = true;
+  const material = new THREE.MeshBasicMaterial({ map: texture, transparent: true });
+
+  // Crear malla para el menú
+  const geometry = new THREE.PlaneGeometry(1.5, 0.75);
+  menuButtonMesh = new THREE.Mesh(geometry, material);
+  menuButtonMesh.position.set(0, 1.6, -2);
+  camera.add(menuButtonMesh);
+
+  // Botón "Reiniciar"
+  const restartGeometry = new THREE.PlaneGeometry(1.2, 0.3);
+  const restartMaterial = new THREE.MeshBasicMaterial({ color: 0x222222 });
+  const restartText = new THREE.Mesh(restartGeometry, restartMaterial);
+  restartText.position.set(0, -0.5, 0.01);
+  restartText.name = 'restartButton';
+  gameOverGroup.add(restartText);
+
+  // Botón "Menú Principal"
+  const menuGeometry = new THREE.PlaneGeometry(1.2, 0.3);
+  const menuMaterial = new THREE.MeshBasicMaterial({ color: 0x222222 });
+  const menuText = new THREE.Mesh(menuGeometry, menuMaterial);
+  menuText.position.set(0, -0.9, 0.01);
+  menuText.name = 'menuButton';
+  gameOverGroup.add(menuText);
+
+  gameOverGroup.position.set(0, 1.6, -2);
+  camera.add(gameOverGroup);
+  gameOverGroup.lookAt(camera.position);
+  gameOverGroup.renderOrder = 1000;
+
+  // Guardar referencias
+  restartButtonMesh = restartText;
+  menuButtonMesh = menuText;
+  texture.needsUpdate = true;
+
+}
+
+
+
+function updateVRHUD() {
+  if (!hudMesh) return;
+  const ctx = hudMesh.userData.context;
+  const canvas = hudMesh.userData.canvas;
+  const accuracy = shotsFired > 0 ? ((score / shotsFired) * 100).toFixed(1) : 0;
+
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.fillStyle = 'white';
+  ctx.font = '30px Arial';
+  ctx.fillText(`Aciertos: ${score}`, 20, 50);
+  ctx.fillText(`Precisión: ${accuracy}%`, 20, 100);
+  ctx.fillText(`Tiempo: ${gameTimer}s`, 20, 150);
+
+  hudMesh.userData.texture.needsUpdate = true;
+}
+
+function createWeapon(parent) {
+  const loader = new GLTFLoader();
+  loader.load('./assets/weapon.glb', gltf => {
+    weapon = gltf.scene;
+    weapon.scale.set(0.3, 0.3, 0.3);
+    weapon.rotation.set(0, Math.PI, 0);
+    weapon.position.set(0, -0.05, -0.25); // Ajusta según el modelo
+    parent.add(weapon);
+  }, undefined, error => {
+    console.error('Error al cargar el arma:', error);
+  });
+}
+
 function createEnvironment() {
-  // Suelo
   const floorGeometry = new THREE.PlaneGeometry(100, 100);
   const floorMaterial = new THREE.MeshStandardMaterial({ map: floorTexture });
   const floor = new THREE.Mesh(floorGeometry, floorMaterial);
@@ -119,7 +257,6 @@ function createEnvironment() {
   floor.receiveShadow = true;
   scene.add(floor);
 
-  // Paredes
   const wallGeometry = new THREE.BoxGeometry(100, 20, 1);
   const wallMaterial = new THREE.MeshStandardMaterial({ map: wallTexture });
   const walls = [
@@ -133,7 +270,6 @@ function createEnvironment() {
     scene.add(wall);
   });
 
-  // Techo
   const ceilingGeometry = new THREE.PlaneGeometry(100, 100);
   const ceilingMaterial = new THREE.MeshStandardMaterial({ map: ceilingTexture });
   const ceiling = new THREE.Mesh(ceilingGeometry, ceilingMaterial);
@@ -142,7 +278,6 @@ function createEnvironment() {
   ceiling.receiveShadow = true;
   scene.add(ceiling);
 
-  // Iluminación
   const sunLight = new THREE.DirectionalLight(0xffffff, 1.2);
   sunLight.position.set(0, 50, 0);
   sunLight.castShadow = true;
@@ -168,7 +303,6 @@ function createTargets() {
     target.receiveShadow = true;
     target.scale.set(originalSize, originalSize, originalSize);
 
-    // Movimiento en eje X
     target.userData.velocity = 0.05 + Math.random() * 0.05;
     if (Math.random() < 0.5) target.userData.velocity *= -1;
 
@@ -212,40 +346,57 @@ function relocateTarget(target) {
   resetTargetTimer(target);
 }
 
-function createWeapon() {
-  // Cubo simple como arma
-  const geometry = new THREE.BoxGeometry(0.3, 0.15, 0.6);
-  const material = new THREE.MeshStandardMaterial({ color: 0x222222 });
-  weapon = new THREE.Mesh(geometry, material);
-
-  // Posición delante de la cámara (jugador)
-  weapon.position.set(0.3, -0.2, -0.5);
-  camera.add(weapon);
-}
-
 function onShoot(event) {
-  if (gameEnded) return;
-
-  shotsFired++;
-
   if (shootSound && shootSound.isPlaying) shootSound.stop();
   shootSound.play();
 
-  // Obtener el controlador que disparó
   const controller = event.target;
-
   const tempMatrix = new THREE.Matrix4();
   tempMatrix.identity().extractRotation(controller.matrixWorld);
 
   const rayOrigin = new THREE.Vector3();
-  const rayDirection = new THREE.Vector3(0, 0, -1);
+const rayDirection = new THREE.Vector3(0, 0, -1);
+
+if (weapon) {
+  weapon.updateWorldMatrix(true, false);
+  rayOrigin.setFromMatrixPosition(weapon.matrixWorld);
+  rayDirection.applyMatrix4(tempMatrix);
+  const flash = new THREE.PointLight(0xffaa00, 1, 2);
+flash.position.set(0, 0, -0.3);
+weapon.add(flash);
+setTimeout(() => weapon.remove(flash), 100);
+} else {
   rayOrigin.setFromMatrixPosition(controller.matrixWorld);
   rayDirection.applyMatrix4(tempMatrix);
+}
+
 
   raycaster.set(rayOrigin, rayDirection);
 
-  const intersects = raycaster.intersectObjects(targets);
+  if (gameEnded) {
+  const interactiveButtons = [restartButtonMesh, menuButtonMesh].filter(Boolean);
+  const intersects = raycaster.intersectObjects(interactiveButtons);
+  if (intersects.length > 0) {
+    const clicked = intersects[0].object;
+    if (clicked.name === 'restartButton') {
+      camera.remove(gameOverGroup);
+      gameOverGroup = null;
+      window.startGame();
+    } else if (clicked.name === 'menuButton') {
+      camera.remove(gameOverGroup);
+      gameOverGroup = null;
+      document.getElementById('main-menu').style.display = 'block';
+    }
+    return;
+  }
+  return;
+}
 
+
+
+  shotsFired++;
+
+  const intersects = raycaster.intersectObjects(targets);
   if (intersects.length > 0) {
     const target = intersects[0].object;
     if (!target.userData.hit) {
@@ -266,15 +417,11 @@ function onShoot(event) {
   updateHUD();
 }
 
-
 function animateWeapon() {
   if (!weapon) return;
 
-  // Retroceso simple del arma
-  const originalZ = -0.5;
-  const recoilZ = -0.7;
-  const duration = 100;
-
+  const recoilZ = -0.35;
+  const originalZ = -0.25;
   weapon.position.z = recoilZ;
 
   setTimeout(() => {
@@ -288,13 +435,15 @@ function animateWeapon() {
         clearInterval(interval);
       }
     }, 10);
-  }, duration);
+  }, 50);
 }
 
+
 function updateHUD() {
-  document.getElementById("score").textContent = `Aciertos: ${score}`;
   const accuracy = shotsFired > 0 ? ((score / shotsFired) * 100).toFixed(1) : 0;
+  document.getElementById("score").textContent = `Aciertos: ${score}`;
   document.getElementById("accuracy").textContent = `Precisión: ${accuracy}%`;
+  document.getElementById("timer").textContent = `Tiempo: ${gameTimer}s`;
 }
 
 function startGameTimer() {
@@ -303,24 +452,34 @@ function startGameTimer() {
     gameTimer--;
     document.getElementById("timer").textContent = `Tiempo: ${gameTimer}`;
     if (gameTimer <= 0) {
+      endedByTimer = true; // <-- Marcamos que terminó por tiempo
       endGame();
     }
   }, 1000);
 }
+
 
 function endGame() {
   clearInterval(gameInterval);
   gameEnded = true;
 
   const accuracy = shotsFired > 0 ? ((score / shotsFired) * 100).toFixed(1) : 0;
-
-  document.getElementById("endScreen").style.display = "block";
-  document.getElementById("finalScore").textContent = `Puntaje final: ${score}`;
-  document.getElementById("finalAccuracy").textContent = `Precisión final: ${accuracy}%`;
   guardarEnLeaderboard(score, accuracy);
+  createVRGameOverScreen();
 
-  // Añadir opciones para reiniciar o volver al menú si quieres...
+  // ✅ Asegurar que el render loop continúa después del fin del juego
+  renderer.setAnimationLoop(() => {
+    render();
+    highlightVRButtons(); // Para interacción con menú final
+    if (hudMesh) {
+  camera.remove(hudMesh);
+  hudMesh = null;
 }
+
+  });
+}
+
+
 
 function guardarEnLeaderboard(puntaje, precision) {
   const leaderboard = JSON.parse(localStorage.getItem('leaderboard')) || [];
@@ -329,20 +488,38 @@ function guardarEnLeaderboard(puntaje, precision) {
   if (leaderboard.length > 10) leaderboard.pop();
   localStorage.setItem('leaderboard', JSON.stringify(leaderboard));
 }
+function highlightVRButtons() {
+  if (!menuButtonMesh) return;
+
+  const intersection = raycaster.intersectObject(menuButtonMesh);
+  if (intersection.length > 0) {
+    menuButtonMesh.material.color.set(0xff0000); // Ejemplo: resaltar en rojo
+  } else {
+    menuButtonMesh.material.color.set(0xffffff); // Restaurar color
+  }
+}
 
 function animate() {
-  renderer.setAnimationLoop(render);
+  renderer.setAnimationLoop(() => {
+    render();
+    updateVRHUD();
+    updateHUD();
+    highlightVRButtons(); // <-- Añadido aquí
+  });
 }
 
 function render() {
   const delta = clock.getDelta();
 
-  // Mover objetivos (oscilando en X)
   targets.forEach(target => {
     target.position.x += target.userData.velocity;
     if (target.position.x > 10 || target.position.x < -10) {
       target.userData.velocity = -target.userData.velocity;
     }
+    if (gameOverGroup && gameEnded) {
+  gameOverGroup.lookAt(camera.getWorldPosition(new THREE.Vector3()));
+}
+
   });
 
   renderer.render(scene, camera);
@@ -351,6 +528,18 @@ function render() {
 function onWindowResize() {
   camera.aspect = window.innerWidth / window.innerHeight;
   camera.updateProjectionMatrix();
-
   renderer.setSize(window.innerWidth, window.innerHeight);
 }
+// Mostrar leaderboard
+document.getElementById('leaderboard-button').addEventListener('click', () => {
+  const list = document.getElementById('leaderboard-list');
+  list.innerHTML = '';
+  const leaderboard = JSON.parse(localStorage.getItem('leaderboard')) || [];
+  leaderboard.forEach(entry => {
+    const li = document.createElement('li');
+    const date = new Date(entry.date).toLocaleDateString();
+    li.textContent = `🎯 ${entry.score} pts - ${entry.accuracy}% - ${date}`;
+    list.appendChild(li);
+  });
+  document.getElementById('leaderboard-modal').style.display = 'block';
+});
